@@ -24,6 +24,7 @@ fi
 
 mkdir -p "$SETTINGS/mcm" "$SETTINGS/profiles"
 
+# ── Game settings ─────────────────────────────────────────────────────────────
 info "Grabbing user.ltx..."
 if [[ -f "$STALKER/Anomaly/appdata/user.ltx" ]]; then
     cp "$STALKER/Anomaly/appdata/user.ltx" "$SETTINGS/user.ltx"
@@ -34,8 +35,8 @@ fi
 
 info "Grabbing MCM settings..."
 MCM_SRC=""
-for candidate in "$STALKER/ZONA/mods/"*"MCM values"*/gamedata/configs/axr_options.ltx; do
-    [[ -f "$candidate" ]] && MCM_SRC="$candidate" && break
+for _c in "$STALKER/ZONA/mods/"*"MCM values"*/gamedata/configs/axr_options.ltx; do
+    [[ -f "$_c" ]] && MCM_SRC="$_c" && break
 done
 if [[ -n "$MCM_SRC" ]]; then
     cp "$MCM_SRC" "$SETTINGS/mcm/axr_options.ltx"
@@ -44,16 +45,42 @@ else
     warn "MCM axr_options.ltx not found under ZONA/mods/ — skipping"
 fi
 
+# ── PortProton / launch config ────────────────────────────────────────────────
+info "Grabbing ModOrganizer.exe.ppdb..."
+if [[ -f "$STALKER/ZONA/ModOrganizer.exe.ppdb" ]]; then
+    cp "$STALKER/ZONA/ModOrganizer.exe.ppdb" "$SETTINGS/ModOrganizer.exe.ppdb"
+    ok "ModOrganizer.exe.ppdb → settings/ModOrganizer.exe.ppdb"
+else
+    warn "ModOrganizer.exe.ppdb not found — skipping"
+fi
+
+info "Grabbing commandline.txt..."
+if [[ -f "$STALKER/Anomaly/commandline.txt" ]]; then
+    cp "$STALKER/Anomaly/commandline.txt" "$SETTINGS/commandline.txt"
+    ok "commandline.txt → settings/commandline.txt"
+else
+    warn "commandline.txt not found — skipping"
+fi
+
+info "Grabbing dxvk.conf..."
+if [[ -f "$STALKER/Anomaly/dxvk.conf" ]]; then
+    cp "$STALKER/Anomaly/dxvk.conf" "$SETTINGS/dxvk.conf"
+    ok "dxvk.conf → settings/dxvk.conf"
+else
+    warn "dxvk.conf not found — skipping"
+fi
+
+# ── MO2 modlists ──────────────────────────────────────────────────────────────
 info "Grabbing MO2 modlists..."
-for profile_dir in "$STALKER/ZONA/profiles"/*/; do
-    [[ -d "$profile_dir" ]] || continue
-    profile_name="$(basename "$profile_dir")"
-    if [[ -f "$profile_dir/modlist.txt" ]]; then
-        mkdir -p "$SETTINGS/profiles/$profile_name"
-        cp "$profile_dir/modlist.txt" "$SETTINGS/profiles/$profile_name/modlist.txt"
-        ok "[$profile_name] modlist.txt → settings/profiles/$profile_name/modlist.txt"
+for _pdir in "$STALKER/ZONA/profiles"/*/; do
+    [[ -d "$_pdir" ]] || continue
+    _pname="$(basename "$_pdir")"
+    if [[ -f "$_pdir/modlist.txt" ]]; then
+        mkdir -p "$SETTINGS/profiles/$_pname"
+        cp "$_pdir/modlist.txt" "$SETTINGS/profiles/$_pname/modlist.txt"
+        ok "[$_pname] modlist.txt → settings/profiles/$_pname/"
     else
-        warn "[$profile_name] no modlist.txt — skipping"
+        warn "[$_pname] no modlist.txt — skipping"
     fi
 done
 

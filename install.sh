@@ -5,6 +5,7 @@ set -uo pipefail
 # ── Configuration ──────────────────────────────────────────────────────────────
 MO2_VERSION="2.5.2"
 DOTNET_PREFIX_NAME="DOTNET"
+PP_ROOT="$HOME/PortProton"
 # Stable GitHub release — if the version changes, update this line (see links.txt)
 MODDED_EXES_URL="https://github.com/themrdemonized/xray-monolith/releases/download/2026.3.29/STALKER-Anomaly-modded-exes_2026.3.29.zip"
 
@@ -60,7 +61,16 @@ _modded_exes_ok() {
 }
 
 _portproton_prefix_dir() {
-    printf '%s/PortProton/data/prefixes/%s' "$HOME" "$DOTNET_PREFIX_NAME"
+    printf '%s/data/prefixes/%s' "$PP_ROOT" "$DOTNET_PREFIX_NAME"
+}
+
+# Asks the user whether PortProton is already installed and where.
+# Sets PP_ROOT to the confirmed path; exits with error if path not found.
+_detect_portproton() {
+    printf "\n"
+    printf "${Y}Have you already set up PortProton? [y/N]:${N} " >&2
+    read -r _pp_ans || _pp_ans=""
+    [[ "${_pp_ans:-N}" =~ ^[Yy]$ ]] && _PP_SETUP_DONE=1 || _PP_SETUP_DONE=0
 }
 
 # ── System packages ────────────────────────────────────────────────────────────
@@ -141,19 +151,77 @@ command -v gamma-launcher &>/dev/null && \
 # ── Re-run menu ────────────────────────────────────────────────────────────────
 # Shown when ZONA is already fully installed. Offers update, backup, and reset.
 _FORCE_INSTALL=0
+_WINETRICKS_ONLY=0
+
+_clear_shader_cache() {
+    local _removed=0
+    if [[ -d "$STALKER/Anomaly/appdata/shaders_cache" ]]; then
+        rm -rf "$STALKER/Anomaly/appdata/shaders_cache/"
+        ok "Cleared: Anomaly/appdata/shaders_cache/"
+        _removed=1
+    fi
+    while IFS= read -r _f; do
+        rm -f "$_f"
+        ok "Cleared: $(realpath --relative-to="$STALKER" "$_f")"
+        _removed=1
+    done < <(find "$STALKER/Anomaly" -maxdepth 3 -name "*.dxvk-cache" 2>/dev/null)
+    (( _removed )) || warn "No shader cache files found — nothing to clear."
+}
+
+# Copies ZONA-supplied user.ltx and axr_options.ltx into the Anomaly tree.
+# Pass 1 to force-overwrite existing files; omit or pass 0 to skip if present.
+_place_settings() {
+    local _force="${1:-0}"
+    local user_ltx axr_ltx
+    user_ltx=$(find "$STALKER/ZONA" -name "user.ltx" 2>/dev/null | head -1 || true)
+    if [[ -n "$user_ltx" ]]; then
+        if [[ "$_force" -eq 1 || ! -f "$STALKER/Anomaly/appdata/user.ltx" ]]; then
+            mkdir -p "$STALKER/Anomaly/appdata"
+            cp -f "$user_ltx" "$STALKER/Anomaly/appdata/user.ltx"
+            ok "user.ltx → Anomaly/appdata/user.ltx"
+        else
+            ok "user.ltx: already exists (skipping)"
+        fi
+    else
+        warn "user.ltx not found in ZONA — place it manually at: Anomaly/appdata/user.ltx"
+    fi
+
+    axr_ltx=$(find "$STALKER/ZONA" -name "axr_options.ltx" 2>/dev/null | head -1 || true)
+    if [[ -n "$axr_ltx" ]]; then
+        if [[ "$_force" -eq 1 || ! -f "$STALKER/Anomaly/gamedata/configs/axr_options.ltx" ]]; then
+            mkdir -p "$STALKER/Anomaly/gamedata/configs"
+            cp -f "$axr_ltx" "$STALKER/Anomaly/gamedata/configs/axr_options.ltx"
+            ok "axr_options.ltx → Anomaly/gamedata/configs/axr_options.ltx"
+        else
+            ok "axr_options.ltx: already exists (skipping)"
+        fi
+    else
+        warn "axr_options.ltx not found in ZONA — place it manually at: Anomaly/gamedata/configs/axr_options.ltx"
+    fi
+}
 
 if _zona_ok; then
     printf "\n"
     info "ZONA is installed. What would you like to do?"
     printf "\n"
-    printf "  1) Update ZONA (re-download modpack)\n"
+    printf "  1) Update / re-install ZONA\n"
     printf "  2) Redo PortProton / winetricks setup\n"
-    printf "  3) Backup settings\n"
-    printf "  4) Restore settings\n"
-    printf "  5) Reset install progress (re-run all steps)\n"
-    printf "  6) Exit\n"
+    printf "  3) Performance tweaks (recommended after option 2)\n"
+    printf "  4) Backup settings\n"
+    printf "  5) Restore settings\n"
+    printf "  6) Reset install progress (re-run all steps)\n"
+    printf "  7) Clear shader cache\n"
+    printf "  8) Exit\n"
     printf "\n"
-    printf "${Y}  Choice [1-6]:${N} "; read -r _choice || _choice=6
+    printf "${R}   WARNING: NEVER click SETTINGS → Find settings (ppdb) in PortProton.\n"
+    printf "           It overwrites the ppdb and ruins everything. It also does\n"
+    printf "           some other things that somehow ruin everything in a truly amazing way.${N}\n"
+    printf "\n"
+    if [[ -n "${ZONA_STEP:-}" ]]; then
+        _choice="$ZONA_STEP"
+    else
+        printf "${Y}  Choice [1-8]:${N} "; read -r _choice || _choice=8
+    fi
 
     _BACKUP_DIR="$STALKER/.settings_backups"
 
@@ -170,6 +238,48 @@ if _zona_ok; then
             cp "$profile_dir"*.{txt,ini} "$dest/profiles/$pname/" 2>/dev/null || true
         done
         ok "Settings backed up → $dest"
+    }
+
+    _perf_tweaks() {
+        local T='  '
+        info "Changing PortProton settings:"
+        printf "\n"
+        printf "${T}1. Open ModOrganizer.exe with PortProton\n"
+        printf "${T}2. Go to SETTINGS → Base Settings and apply the following:\n"
+        printf "\n"
+        printf "${T}┌──────────────────────┬─────┬──────────────────────┬─────┬──────────────────────┬─────┐\n"
+        printf "${T}│ %-20s │ %-3s │ %-20s │ %-3s │ %-20s │ %-3s │\n" \
+            "SETTING" "VAL" "SETTING" "VAL" "SETTING" "VAL"
+        printf "${T}├──────────────────────┼─────┼──────────────────────┼─────┼──────────────────────┼─────┤\n"
+        printf "${T}│ %-20s │ %-3s │ %-20s │ %-3s │ %-20s │ %-3s │\n" \
+            "MANGOHUD"           "OFF" "WINE FULLSCREEN FSR" "ON"  "USE WINE DXGI"        "OFF"
+        printf "${T}│ %-20s │ %-3s │ %-20s │ %-3s │ %-20s │ %-3s │\n" \
+            "MANGOHUD USER CONF" "OFF" "HIDE NVIDIA GPU"     "OFF" "USE EAC AND BE"       "OFF"
+        printf "${T}│ %-20s │ %-3s │ %-20s │ %-3s │ %-20s │ %-3s │\n" \
+            "VKBASALT"           "OFF" "VIRTUAL DESKTOP"     "OFF" "USE SYSTEM VK LAYERS" "OFF"
+        printf "${T}│ %-20s │ %-3s │ %-20s │ %-3s │ %-20s │ %-3s │\n" \
+            "VKBASALT USER CONF" "OFF" "USE TERMINAL"        "OFF" "USE OBS VKCAPTURE"    "OFF"
+        printf "${T}│ %-20s │ %-3s │ %-20s │ %-3s │ %-20s │ %-3s │\n" \
+            "DGVOODOO2"          "OFF" "GUI DISABLED CS"     "OFF" "DISABLE COMPOSITING"  "OFF"
+        printf "${T}│ %-20s │ %-3s │ %-20s │ %-3s │ %-20s │ %-3s │\n" \
+            "USE ESYNC"          "OFF" "USE GAMEMODE"        "ON"  "USE RUNTIME"          "ON"
+        printf "${T}│ %-20s │ %-3s │ %-20s │ %-3s │ %-20s │ %-3s │\n" \
+            "USE FSYNC"          "OFF" "USE INHIBIT SLEEP"   "OFF" "DINPUT PROTOCOL"      "OFF"
+        printf "${T}│ %-20s │ %-3s │ %-20s │ %-3s │ %-20s │ %-3s │\n" \
+            "USE NTSYNC"         "ON"  "USE D3D EXTRAS"      "OFF" "USE GALLIUM ZINK"     "OFF"
+        printf "${T}│ %-20s │ %-3s │ %-20s │ %-3s │ %-20s │ %-3s │\n" \
+            "USE RAY TRACING"    "OFF" "FIX VIDEO IN GAME"   "OFF" "USE WINED3D VULKAN"   "OFF"
+        printf "${T}│ %-20s │ %-3s │ %-20s │ %-3s │ %-20s │ %-3s │\n" \
+            "USE NVAPI AND DLSS" "OFF" "REDUCE PULSE LATENCY" "OFF" "USE NATIVE WAYLAND"  "OFF"
+        printf "${T}│ %-20s │ %-3s │ %-20s │ %-3s │ %-20s │ %-3s │\n" \
+            "USE OPTISCALER"     "OFF" "USE GSTREAMER"       "OFF" "USE DXVK HDR"         "OFF"
+        printf "${T}│ %-20s │ %-3s │ %-20s │ %-3s │ %-20s │ %-3s │\n" \
+            "USE LS FRAME GEN"   "OFF" "USE SHADER CACHE"    "OFF" "GAMESCOPE"            "OFF"
+        printf "${T}└──────────────────────┴─────┴──────────────────────┴─────┴──────────────────────┴─────┘\n"
+        printf "\n"
+        printf "${T}These are a starting point. If the game crashes 3+ times,\n"
+        printf "${T}set USE NTSYNC → OFF and USE FSYNC → ON, then retry.\n"
+        printf "\n"
     }
 
     _restore_settings() {
@@ -202,12 +312,39 @@ if _zona_ok; then
     }
 
     case "$_choice" in
-        1) _FORCE_INSTALL=1; _clear zona_dl; _clear zona_extract ;;
-        2) ;;
-        3) _backup_settings; exit 0 ;;
-        4) _restore_settings; exit 0 ;;
-        5) rm -rf "$STEPS_DIR"; mkdir -p "$STEPS_DIR"; ok "Progress reset." ;;
-        6) exit 0 ;;
+        1)
+            printf "\n"
+            printf "  1) Full re-install (skips steps already completed)\n"
+            printf "  2) Reset settings only (overwrites user.ltx and axr_options.ltx)\n"
+            printf "\n"
+            printf "${Y}  Choice [1-2]:${N} "; read -r _sub || _sub=""
+            case "${_sub:-1}" in
+                1) ;;
+                2) _place_settings 1; exit 0 ;;
+                *) warn "Invalid choice." ;;
+            esac
+            ;;
+        2) _WINETRICKS_ONLY=1 ;;
+        3) _perf_tweaks
+           printf "  Press Enter when done to run performance tuning... "
+           read -r _
+           bash "$STALKER/perf.sh"
+           exit 0 ;;
+        4) _backup_settings; exit 0 ;;
+        5) _restore_settings; exit 0 ;;
+        6) rm -rf "$STEPS_DIR"; mkdir -p "$STEPS_DIR"; ok "Progress reset." ;;
+        7)
+            printf "\n"
+            printf "${Y}Clear shader cache? [y/N]:${N} " >&2
+            read -r _cc || _cc=""
+            if [[ "${_cc:-N}" =~ ^[Yy]$ ]]; then
+                _clear_shader_cache
+            else
+                warn "Shader cache clear cancelled."
+            fi
+            exit 0
+            ;;
+        8) exit 0 ;;
         *) warn "Invalid choice." ;;
     esac
 fi
@@ -286,7 +423,9 @@ fi
 # The ZONA link changes with each release and is posted in the #install-zona
 # Discord channel. Paste the Google Drive share link when prompted.
 # No Discord account? The last known link is in: $STALKER/links.txt
-if _done zona_dl && [[ -s "$STALKER/cache/zona.7z" ]] && [[ $_FORCE_INSTALL -eq 0 ]]; then
+if [[ $_WINETRICKS_ONLY -eq 1 ]]; then
+    true  # option 2 (Redo PortProton/winetricks) — skip ZONA download
+elif _done zona_dl && [[ -s "$STALKER/cache/zona.7z" ]] && [[ $_FORCE_INSTALL -eq 0 ]]; then
     ok "ZONA archive: already downloaded (skipping)"
 else
     if command -v gdrive-ripper &>/dev/null; then
@@ -362,8 +501,10 @@ fi
 # The DOTNET prefix must exist before winetricks runs and before either
 # AnomalyLauncher.exe or MO2 can be launched through PortProton.
 # Prompted here regardless of whether the ZONA download was skipped.
-DOTNET_PREFIX="$(_portproton_prefix_dir)"
-if [[ ! -d "$DOTNET_PREFIX" ]]; then
+_PP_SETUP_DONE=0
+_detect_portproton
+
+if [[ $_PP_SETUP_DONE -eq 0 ]]; then
     info "PortProton DOTNET prefix setup — do this now before continuing."
     printf "\n"
     printf "  1. Open PortProton\n"
@@ -373,7 +514,33 @@ if [[ ! -d "$DOTNET_PREFIX" ]]; then
     printf "  5. Close PortProton\n"
     printf "\n"
     enter
-    [[ -d "$DOTNET_PREFIX" ]] || warn "DOTNET prefix still not found — winetricks step will be skipped."
+    printf "\n"
+fi
+
+if [[ $_PP_SETUP_DONE -eq 1 ]]; then
+    printf "  Confirm the PortProton installation path\n"
+else
+    printf "  Enter the path you used for PortProton\n"
+fi
+printf "  (press Enter for default: %s):\n" "$PP_ROOT"
+printf "${Y}  Path:${N} " >&2
+read -r _pp_path || _pp_path=""
+# Blank enter or explicit default path → winetricks and AnomalyLauncher ppdb already done
+_PP_DEFAULT_PATH=0
+[[ -z "$_pp_path" || "$_pp_path" == "~/PortProton" || "$_pp_path" == "$HOME/PortProton" ]] \
+    && _PP_DEFAULT_PATH=1
+_pp_path="${_pp_path:-$PP_ROOT}"
+_pp_path="${_pp_path/#\~/$HOME}"
+if [[ -d "$_pp_path" ]]; then
+    PP_ROOT="$_pp_path"
+    ok "PortProton path: $PP_ROOT"
+else
+    die "PortProton not found at '$_pp_path' — re-run and enter the correct installation path."
+fi
+
+DOTNET_PREFIX="$(_portproton_prefix_dir)"
+if [[ ! -d "$DOTNET_PREFIX" ]]; then
+    warn "DOTNET prefix still not found — winetricks step will be skipped."
 else
     ok "DOTNET prefix: already exists"
 fi
@@ -438,28 +605,8 @@ else
 fi
 
 # ── Step 6: Settings files ────────────────────────────────────────────────────
-# Copies the ZONA-supplied user.ltx and axr_options.ltx into the Anomaly tree.
-# These ship inside ZONA's "Ready Made Settings" folder.
-_place_settings() {
-    local user_ltx axr_ltx
-    user_ltx=$(find "$STALKER/ZONA" -name "user.ltx" 2>/dev/null | head -1 || true)
-    if [[ -n "$user_ltx" ]]; then
-        mkdir -p "$STALKER/Anomaly/appdata"
-        cp -f "$user_ltx" "$STALKER/Anomaly/appdata/user.ltx"
-        ok "user.ltx → Anomaly/appdata/user.ltx"
-    else
-        warn "user.ltx not found in ZONA — place it manually at: Anomaly/appdata/user.ltx"
-    fi
-
-    axr_ltx=$(find "$STALKER/ZONA" -name "axr_options.ltx" 2>/dev/null | head -1 || true)
-    if [[ -n "$axr_ltx" ]]; then
-        mkdir -p "$STALKER/Anomaly/gamedata/configs"
-        cp -f "$axr_ltx" "$STALKER/Anomaly/gamedata/configs/axr_options.ltx"
-        ok "axr_options.ltx → Anomaly/gamedata/configs/axr_options.ltx"
-    else
-        warn "axr_options.ltx not found in ZONA — place it manually at: Anomaly/gamedata/configs/axr_options.ltx"
-    fi
-}
+# _place_settings is defined above (before the re-run menu) so it can be called
+# from both the menu (option 1→2 reset) and here during the install flow.
 if _done zona_extract || [[ -f "$STALKER/ZONA/ModOrganizer.exe" ]]; then
     _place_settings
 fi
@@ -485,11 +632,14 @@ fi
 # ── Step 7: Winetricks ────────────────────────────────────────────────────────
 # Installs DirectX and .NET runtime components into the DOTNET prefix.
 # Prefix must already exist — created in step 3.5 above.
-if [[ -d "$DOTNET_PREFIX" ]]; then
+# Skipped when user confirmed PortProton is already set up at the default path.
+if [[ $_PP_SETUP_DONE -eq 1 && $_PP_DEFAULT_PATH -eq 1 ]]; then
+    ok "Winetricks: skipping (already set up)"
+elif [[ -d "$DOTNET_PREFIX" ]]; then
     WINE_BIN=""
     for _wine_search in \
-        "$HOME/PortProton/data/dist/"*/files/bin/wine \
-        "$HOME/PortProton/data/dist/"*/bin/wine \
+        "$PP_ROOT/data/dist/"*/files/bin/wine \
+        "$PP_ROOT/data/dist/"*/bin/wine \
         "$(command -v wine 2>/dev/null || true)"; do
         [[ -x "$_wine_search" ]] && { WINE_BIN="$_wine_search"; break; }
     done
@@ -518,25 +668,30 @@ fi
 # which pairs Wine's dxgi.dll with DXVK's d3d11.dll — that combination fails at
 # D3D11 device creation (DXGI_ERROR_UNSUPPORTED). A .ppdb next to the exe takes
 # priority over the template, so this pre-write ensures DXVK uses its own dxgi.
-_ppdb="$STALKER/Anomaly/AnomalyLauncher.exe.ppdb"
-cat > "$_ppdb" << 'PPDB'
+# Skipped when user confirmed PortProton is already set up at the default path.
+if [[ $_PP_SETUP_DONE -eq 1 && $_PP_DEFAULT_PATH -eq 1 ]]; then
+    ok "AnomalyLauncher.exe.ppdb: skipping (already set up)"
+else
+    _ppdb="$STALKER/Anomaly/AnomalyLauncher.exe.ppdb"
+    cat > "$_ppdb" << 'PPDB'
 #!/usr/bin/env bash
 export PW_VULKAN_USE="6"
 export PW_USE_WINE_DXGI=0
 export PW_WINE_USE="PROTON_LG_10-28"
 export PW_PREFIX_NAME="DOTNET"
 PPDB
-if [[ ! -f "$_ppdb" ]]; then
-    warn "Failed to write AnomalyLauncher.exe.ppdb — create it manually:"
-    printf "  Path: %s\n" "$_ppdb" >&2
-    printf "  Content:\n" >&2
-    printf "    export PW_VULKAN_USE=\"6\"\n" >&2
-    printf "    export PW_USE_WINE_DXGI=0\n" >&2
-    printf "    export PW_WINE_USE=\"PROTON_LG_10-28\"\n" >&2
-    printf "    export PW_PREFIX_NAME=\"DOTNET\"\n" >&2
-    enter
-else
-    ok "AnomalyLauncher.exe.ppdb written."
+    if [[ ! -f "$_ppdb" ]]; then
+        warn "Failed to write AnomalyLauncher.exe.ppdb — create it manually:"
+        printf "  Path: %s\n" "$_ppdb" >&2
+        printf "  Content:\n" >&2
+        printf "    export PW_VULKAN_USE=\"6\"\n" >&2
+        printf "    export PW_USE_WINE_DXGI=0\n" >&2
+        printf "    export PW_WINE_USE=\"PROTON_LG_10-28\"\n" >&2
+        printf "    export PW_PREFIX_NAME=\"DOTNET\"\n" >&2
+        enter
+    else
+        ok "AnomalyLauncher.exe.ppdb written."
+    fi
 fi
 
 # ── Step 9: First launch — AnomalyLauncher.exe ────────────────────────────────
@@ -565,6 +720,31 @@ if ! rm -rf "$STALKER/Anomaly/appdata/shaders_cache/r4/"; then
     printf "  %s/Anomaly/appdata/shaders_cache/r4/\n" "$STALKER" >&2
 else
     ok "Shader cache cleared."
+fi
+
+# ── Step 10.5: ModOrganizer.exe.ppdb ─────────────────────────────────────────
+# Same issue as AnomalyLauncher: PortProton's template ppdb for ModOrganizer
+# may set PW_USE_WINE_DXGI=1 or wrong prefix/wine values. Pre-write takes
+# priority over the template so the correct settings are always used.
+_mo2_ppdb="$STALKER/ZONA/ModOrganizer.exe.ppdb"
+cat > "$_mo2_ppdb" << 'PPDB'
+#!/usr/bin/env bash
+export PW_VULKAN_USE="6"
+export PW_USE_WINE_DXGI=0
+export PW_WINE_USE="PROTON_LG_10-28"
+export PW_PREFIX_NAME="DOTNET"
+PPDB
+if [[ ! -f "$_mo2_ppdb" ]]; then
+    warn "Failed to write ModOrganizer.exe.ppdb — create it manually:"
+    printf "  Path: %s\n" "$_mo2_ppdb" >&2
+    printf "  Content:\n" >&2
+    printf "    export PW_VULKAN_USE=\"6\"\n" >&2
+    printf "    export PW_USE_WINE_DXGI=0\n" >&2
+    printf "    export PW_WINE_USE=\"PROTON_LG_10-28\"\n" >&2
+    printf "    export PW_PREFIX_NAME=\"DOTNET\"\n" >&2
+    enter
+else
+    ok "ModOrganizer.exe.ppdb written."
 fi
 
 # ── Step 11: MO2 first launch and setup ───────────────────────────────────────

@@ -63,7 +63,7 @@ If the ZONA download fails, the script will ask which of the following occurred:
 |---|---|
 | `autoinstall.sh` | Start here — orchestrates all steps |
 | `install.sh` | Downloads Anomaly + ZONA, sets up MO2, PortProton, winetricks |
-| `perf.sh` | CPU/GPU tuning, DXVK config, A-Life patch, AVX binary selection |
+| `perf.sh` | CPU/GPU tuning, DXVK config, commandline.txt heap/framecap, AVX binary check |
 | `perf-root.sh` | Privileged helper called by perf.sh — do not run directly |
 | `settings-grab.sh` | Snapshot current game settings → `settings/` |
 | `settings-inject.sh` | Restore `settings/` → game |
@@ -72,4 +72,4 @@ If the ZONA download fails, the script will ask which of the following occurred:
 
 ## Performance tweaks
 
-`perf.sh` is **untested** — ZONA runs fine without it. Run it only if you have a specific reason to tune CPU governor, DXVK settings, or the A-Life simulation radius. The AVX binary selection runs unconditionally and is safe.
+`perf.sh` is largely untested on fresh installs. The `commandline.txt` section is confirmed functional — the engine crashes on startup without a defined `-heap` value. Everything else is best-effort; run it only if you have a specific reason to tune CPU governor or DXVK settings.
